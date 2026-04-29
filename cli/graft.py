@@ -15,15 +15,16 @@ import sys
 import os
 from pathlib import Path
 
+# Wire up imports BEFORE any graft imports
+_root = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(_root / "engine"))
+sys.path.insert(0, str(_root / "parser"))
+sys.path.insert(0, str(_root / "code_indexer"))
+sys.path.insert(0, str(_root / "server"))
+
 import typer
 import sqlalchemy as sa
 from rich.console import Console
-
-# Wire up imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "engine"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "parser"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "code_indexer"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
 from code_indexer.schema import create_all
 from code_indexer.indexer import scan_dir
