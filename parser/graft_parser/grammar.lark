@@ -1,0 +1,88 @@
+// GQL -- Graft Query Language grammar (Lark EBNF)
+// Normative. Must stay in sync with parser/SPECS.md s3.
+// Parser: earley, ambiguity=resolve.
+//
+// Design note: uses left-recursive rules (no group quantifiers)
+// so the grammar is unambiguous to Lark's earley parser.
+
+// ---- Query root -----------------------------------------------------------
+
+query : "from" entity_path "as" IDENT "select" projection
+      | "from" entity_path "as" IDENT "where" condition "select" projection
+
+// ---- Entity path (left-recursive) ----------------------------------------
+
+entity_path : ROOT_ENTITY                  -> entity_root
+            | entity_path "." traversal    -> entity_chain
+
+ROOT_ENTITY : "function"
+            | "class"
+            | "file"
+            | "expression"
+
+traversal   : IDENT "(" ")"         -> pred_noargs
+            | IDENT "(" arglist ")" -> pred_args
+            | IDENT                 -> field_traversal
+
+arglist     : arg                   -> arglist_single
+            | arglist "," arg       -> arglist_chain
+
+arg         : STRING                -> arg_string
+            | NUMBER                -> arg_number
+            | NULL_KW               -> arg_null
+
+// ---- Condition (left-recursive) ------------------------------------------
+
+condition   : expr                      -> cond_single
+            | condition BOOL_OP expr    -> cond_chain
+
+BOOL_OP     : "and" | "or"
+
+expr        : field OP value            -> binary_expr
+            | field "like" STRING       -> like_expr
+            | "not" expr                -> not_expr
+            | "(" condition ")"         -> grouped_expr
+
+field       : IDENT "." IDENT          -> field_root
+            | field "." IDENT           -> field_chain
+
+OP          : ">=" | "<=" | "!=" | "=" | ">" | "<"
+
+value       : STRING                    -> val_string
+            | NUMBER                    -> val_number
+            | NULL_KW                   -> val_null
+            | TRUE_KW                   -> val_true
+            | FALSE_KW                  -> val_false
+            | field                     -> val_field
+
+// ---- Projection (left-recursive) -----------------------------------------
+
+projection  : proj_item                     -> proj_single
+            | projection "," proj_item      -> proj_chain
+
+proj_item   : concat_item
+
+concat_item : atom_item                     -> concat_single
+            | concat_item "+" atom_item     -> concat_chain
+
+atom_item   : field                         -> field_proj
+            | STRING                        -> literal_proj
+
+// ---- Terminals -----------------------------------------------------------
+
+NULL_KW  : "null"
+TRUE_KW  : "true"
+FALSE_KW : "false"
+
+// IDENT comes after keyword terminals so keywords win on overlap
+IDENT    : /[a-zA-Z_][a-zA-Z0-9_]*/
+
+STRING   : /\"(?:[^\"\\]|\\.)*\"/ | /\'(?:[^\'\\]|\\.)*\'/
+NUMBER   : /[0-9]+(\.[0-9]+)?/
+
+// ---- Whitespace and comments ---------------------------------------------
+
+%import common.WS
+%ignore WS
+%ignore /--[^\n]*/
+%ignore /\/\*(?s:.*?)\*\//

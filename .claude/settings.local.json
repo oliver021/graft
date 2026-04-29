@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python verify_indexer.py)",
+      "Bash(python -c \"import sys; print\\(sys.path\\)\")",
+      "Bash(pip install *)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); from indexer.indexer import scan; print\\('✓ indexer module imports successfully'\\)\")",
+      "Bash(python -m pytest tests/code_indexer/test_indexer.py -v --tb=short)",
+      "Bash(python -m pytest tests/code_indexer/test_indexer.py -v --tb=line)",
+      "Bash(python -m pytest tests/code_indexer/test_demo.py -v -s)",
+      "Bash(python -m pytest tests/code_indexer/ -v --tb=line)",
+      "Bash(python -m pytest tests/code_indexer/test_indexer.py -v)",
+      "Bash(python -c \"import lark; print\\(lark.__version__\\)\")",
+      "Bash(python -m pytest tests/parser/test_parser.py -v)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/engine/test_entity_registry.py -v)"
+    ]
+  }
+}
