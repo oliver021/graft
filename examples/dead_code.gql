@@ -1,0 +1,4 @@
+-- Dead code: functions defined but never called anywhere in the indexed codebase.
+-- These are candidates for removal or entry points called from outside the indexed scope.
+from function.withoutCallers() as fn
+select fn.name, fn.filename, fn.start

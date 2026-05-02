@@ -1,0 +1,5 @@
+-- Complexity hotspots: functions with deep call chains (depth > 4).
+-- Deep chains are where bugs hide and refactors tend to break things.
+from function.callDepth() as fn
+where fn.depth > 4
+select fn.name, fn.depth, fn.filename, fn.start

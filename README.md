@@ -1,6 +1,37 @@
 # Graft
 
+> **Preview / Alpha** — Python only. API may change. Install from source. Feedback and issues very welcome.
+
 **Query your codebase. Don't read it.**
+
+![Graft demo](docs/demo.gif)
+
+---
+
+## Install (Preview)
+
+```bash
+git clone https://github.com/oliver021/graft-ql.git
+cd graft-ql
+pip install -e .
+```
+
+Then point it at any Python codebase:
+
+```bash
+graft index ./src --db sqlite:///index.db
+graft query "from function.withoutCallers() as fn select fn.name, fn.filename" --db sqlite:///index.db
+```
+
+```
+name            | filename
+----------------+---------------------
+_legacy_parse   | src/parser/old.py
+_unused_handler | src/server/routes.py
+(2 rows) — 4ms
+```
+
+> Python 3.10+. SQLite included. No accounts, no cloud, no rate limits.
 
 ---
 
@@ -145,134 +176,73 @@ from function.getDoesThrow() as fn select fn.name, fn.filename
 | `graft_server` | ✅ Minimal | — |
 | CLI (`graft`) | ✅ Minimal | — |
 
-**Total: 235 passing tests.** Language: Python. DB: SQLite (Postgres-ready).
+**Total: 554 passing tests.** Language support: **Python only in v1** (JavaScript/TypeScript on the roadmap). DB: SQLite (Postgres-ready schema).
 
 ---
 
-## First Test — Step by Step
+## Quickstart
 
-### Prerequisites
-
-```bash
-pip install lark sqlalchemy fastapi uvicorn typer rich tree-sitter
-# Tree-sitter Python grammar
-pip install tree-sitter-python
-```
-
-### 1. Clone and enter the repo
+### 1. Install
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/graft-ql.git
 cd graft-ql
+pip install -e .
 ```
 
-### 2. Run the full test suite
+### 2. Index a codebase
 
 ```bash
-python -m pytest tests/ -q
+graft index ./your-project --db sqlite:///myproject.db
 ```
 
-Expected output:
-```
-235 passed in 0.6s
-```
-
-### 3. Run the end-to-end demo
-
-The demo creates sample Python code, indexes it, and runs several GQL queries against it — no setup required.
+### 3. Ask questions
 
 ```bash
-python e2e_demo.py
-```
+# Dead code — functions defined but never called
+graft query "from function.withoutCallers() as fn select fn.name, fn.filename" --db sqlite:///myproject.db
 
-You will see:
+# Risk surface — calls to eval/exec
+graft query 'from function.calls as c where c.name like "eval" select c.enclosing, c.filename, c.start' --db sqlite:///myproject.db
 
-```
-[*] Indexing sample code...
-    [OK] 7 symbols
-    [OK] 13 expressions
-    [OK] 5 references
-
-[QUERY] Functions that throw/raise
-   from function.getDoesThrow() as fn select fn.name, fn.filename
-
-name     | filename
----------+----------
-validate | sample.py
-(1 row)  — 0.86ms
-
-[QUERY] Functions never called
-   from function.withoutCallers() as fn select fn.name, fn.filename
-
-name            | filename
-----------------+----------
-unused_function | sample.py
-(1 row)  — 0.7ms
-```
-
-### 4. Index real code
-
-```bash
-# Point it at any Python directory you have
-python -m cli.graft index ./your-project --db sqlite:///myproject.db
-```
-
-### 5. Run queries
-
-```bash
-# All functions and where they live
-python -m cli.graft query \
-  "from function as fn select fn.name, fn.filename, fn.start" \
-  --db sqlite:///myproject.db
+# Complexity hotspots — deep call chains
+graft query "from function.callDepth() as fn where fn.depth > 4 select fn.name, fn.depth, fn.filename" --db sqlite:///myproject.db
 
 # All functions that raise exceptions
-python -m cli.graft query \
-  "from function.getDoesThrow() as fn select fn.name, fn.filename" \
-  --db sqlite:///myproject.db
-
-# What calls open()?
-python -m cli.graft query \
-  'from function.calls as c where c.name = "open" select c.enclosing, c.filename, c.start' \
-  --db sqlite:///myproject.db
-
-# Dead code
-python -m cli.graft query \
-  "from function.withoutCallers() as fn select fn.name, fn.filename" \
-  --db sqlite:///myproject.db
-
-# Methods in a class
-python -m cli.graft query \
-  "from class.methods as m select m.name, m.className, m.start" \
-  --db sqlite:///myproject.db
+graft query "from function.getDoesThrow() as fn select fn.name, fn.filename" --db sqlite:///myproject.db
 ```
 
-### 6. Get results as JSON or CSV
+### 4. Run saved queries from `.gql` files
 
 ```bash
-python -m cli.graft query \
-  "from function as fn select fn.name, fn.filename" \
-  --db sqlite:///myproject.db \
-  --format json
-
-python -m cli.graft query \
-  "from function as fn select fn.name, fn.filename" \
-  --db sqlite:///myproject.db \
-  --format csv
+graft query --file examples/dead_code.gql --db sqlite:///myproject.db
+graft query --file examples/risky_calls.gql --db sqlite:///myproject.db --format json
 ```
 
-### 7. Start the HTTP server
+### 5. Get results as JSON or CSV
 
 ```bash
-python -m cli.graft serve --db sqlite:///myproject.db
+graft query "from function as fn select fn.name, fn.filename" --db sqlite:///myproject.db --format json
+graft query "from function as fn select fn.name, fn.filename" --db sqlite:///myproject.db --format csv
 ```
 
-Then POST a query from anywhere:
+### 6. Start the HTTP server
+
+```bash
+graft serve --db sqlite:///myproject.db
+```
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "from function as fn select fn.name, fn.filename", "format": "json"}' \
   | python -m json.tool
+```
+
+### 7. Run the self-contained demo
+
+```bash
+python e2e_demo.py
 ```
 
 ---

@@ -1,0 +1,9 @@
+-- Risk surface: every call to eval, exec, open, subprocess, or __import__.
+-- Shows the call site, the enclosing function, and the file — no source reading required.
+from function.calls as c
+where c.name like "eval"
+   or c.name like "exec"
+   or c.name like "open"
+   or c.name like "subprocess"
+   or c.name like "__import__"
+select c.enclosing, c.name, c.filename, c.start

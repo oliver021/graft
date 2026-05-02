@@ -134,6 +134,23 @@ class Projection:
 
 
 # ---------------------------------------------------------------------------
+# ORDER BY
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OrderByItem:
+    """One sort key: a field reference and a direction."""
+    field: Field
+    direction: str  # "asc" | "desc"
+
+
+@dataclass
+class OrderBy:
+    """The ORDER BY clause: an ordered list of sort keys."""
+    items: list[OrderByItem]
+
+
+# ---------------------------------------------------------------------------
 # Root AST node
 # ---------------------------------------------------------------------------
 
@@ -146,8 +163,12 @@ class QueryAST:
     alias:       the name bound to the terminal entity (from `as <alias>`)
     condition:   the WHERE clause (None if omitted)
     projection:  the SELECT clause
+    order_by:    the ORDER BY clause (None if omitted)
+    limit:       the LIMIT count (None if omitted)
     """
     entity_path: EntityPath
     alias: str
     condition: Condition | None
     projection: Projection
+    order_by: OrderBy | None = None
+    limit: int | None = None

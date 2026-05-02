@@ -1,0 +1,4 @@
+-- Import map: every import statement across the entire codebase.
+-- Pipe to CSV for a full dependency inventory: --format csv
+from file.imports as i
+select i.filename, i.module

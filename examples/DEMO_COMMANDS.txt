@@ -1,0 +1,69 @@
+GRAFT DEMO RECORDING COMMANDS
+============================
+
+Before recording, install the demo tools:
+  cd /path/to/graft-ql
+  pip install -e '.[demo]'
+
+When you run `bash examples/record_demo.sh`, it will start asciinema recording.
+Open this file alongside and copy-paste each command below, one at a time.
+Pause ~1-2 seconds between commands to let viewers read the output.
+
+When done, press Ctrl+D to stop recording.
+
+───────────────────────────────────────────────────────────────────────────────
+1. Show graft help
+───────────────────────────────────────────────────────────────────────────────
+graft --help
+
+
+───────────────────────────────────────────────────────────────────────────────
+2. Clone Flask (a real, well-known codebase)
+───────────────────────────────────────────────────────────────────────────────
+git clone https://github.com/pallets/flask.git flask-src
+
+
+───────────────────────────────────────────────────────────────────────────────
+3. Index Flask
+───────────────────────────────────────────────────────────────────────────────
+graft index ./flask-src/src --db flask.db
+
+
+───────────────────────────────────────────────────────────────────────────────
+4. Show all queryable entities (root entities)
+───────────────────────────────────────────────────────────────────────────────
+graft entities
+
+
+───────────────────────────────────────────────────────────────────────────────
+5. Dead code hunt
+───────────────────────────────────────────────────────────────────────────────
+graft query "from function.withoutCallers() as fn select fn.name, fn.filename limit 10" --db flask.db
+
+
+───────────────────────────────────────────────────────────────────────────────
+6. Risk surface — calls to dangerous functions
+───────────────────────────────────────────────────────────────────────────────
+graft query "from function.calls as c where c.name like \"eval\" or c.name like \"exec\" or c.name like \"open\" or c.name like \"__import__\" select c.enclosing, c.name, c.filename" --db flask.db
+
+
+───────────────────────────────────────────────────────────────────────────────
+7. Complexity hotspots — deep call chains
+───────────────────────────────────────────────────────────────────────────────
+graft query "from function.callDepth() as fn where fn.depth > 4 select fn.name, fn.depth, fn.filename" --db flask.db
+
+
+───────────────────────────────────────────────────────────────────────────────
+8. Show fields available on function.calls entity
+───────────────────────────────────────────────────────────────────────────────
+graft fields function.calls
+
+
+───────────────────────────────────────────────────────────────────────────────
+9. Export results as JSON
+───────────────────────────────────────────────────────────────────────────────
+graft query "from function.withoutCallers() as fn select fn.name, fn.filename limit 5" --db flask.db --format json
+
+───────────────────────────────────────────────────────────────────────────────
+DONE — Press Ctrl+D to stop recording
+───────────────────────────────────────────────────────────────────────────────

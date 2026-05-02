@@ -18,6 +18,8 @@ from .ast_nodes import (
     FieldProjection,
     FieldTraversal,
     LiteralProjection,
+    OrderBy,
+    OrderByItem,
     PredicateTraversal,
     Projection,
     QueryAST,
@@ -56,21 +58,37 @@ class GQLTransformer(Transformer):
     # ── Query ────────────────────────────────────────────────────────────
 
     def query(self, items):
-        # Without where: [entity_path, IDENT, projection]  len=3
-        # With where:    [entity_path, IDENT, condition, projection]  len=4
+        # items[0] is always EntityPath, items[1] is always the alias IDENT.
+        # Remaining items vary by which of the 8 grammar alternatives matched;
+        # we identify each by type rather than position.
         entity_path = items[0]
         alias = str(items[1])
-        if len(items) == 4:
-            condition = items[2]
-            projection = items[3]
-        else:
-            condition = None
-            projection = items[2]
+        condition  = None
+        projection = None
+        order_by   = None
+        limit      = None
+        for item in items[2:]:
+            if isinstance(item, Condition):
+                condition = item
+            elif isinstance(item, Projection):
+                projection = item
+            elif isinstance(item, OrderBy):
+                order_by = item
+            elif isinstance(item, int):
+                limit = item
+        if projection is None:
+            # Should be unreachable: every grammar alternative ends with `projection`.
+            # Guard against future grammar changes producing unexpected tree shapes.
+            raise GraftParseError.internal(
+                "SELECT projection was not found in the parse tree"
+            )
         return QueryAST(
             entity_path=entity_path,
             alias=alias,
             condition=condition,
             projection=projection,
+            order_by=order_by,
+            limit=limit,
         )
 
     # ── Entity path ──────────────────────────────────────────────────────
@@ -141,16 +159,26 @@ class GQLTransformer(Transformer):
                 value=inner.value,
                 negated=not inner.negated,
             )
-        raise GraftParseError(
-            "'not' can only negate a simple comparison in v0.1"
+        raise GraftParseError.unsupported(
+            "Negating a compound condition with 'not'",
+            hint=(
+                "'not' can only negate a single comparison, e.g.  not fn.name = 'foo'. "
+                "For compound negation rewrite each term: "
+                "not fn.a = 'x' and not fn.b = 'y'"
+            ),
         )
 
     def grouped_expr(self, items):
         cond: Condition = items[0]
         if len(cond.expressions) == 1:
             return cond.expressions[0]
-        raise GraftParseError(
-            "Parenthesised conditions with multiple terms are not supported in v0.1"
+        raise GraftParseError.unsupported(
+            "Parenthesised multi-term conditions",
+            hint=(
+                "Parentheses around multiple conditions are not yet supported. "
+                "Rewrite the condition at the top level using 'and' / 'or', e.g.: "
+                "where fn.a = 'x' and fn.b = 'y'"
+            ),
         )
 
     # ── Field ────────────────────────────────────────────────────────────
@@ -206,3 +234,25 @@ class GQLTransformer(Transformer):
 
     def literal_proj(self, items):
         return LiteralProjection(value=_unescape(str(items[0])))
+
+    # ── ORDER BY ─────────────────────────────────────────────────────────
+
+    def order_by(self, items):
+        return OrderBy(items=items[0])
+
+    def orderitems_single(self, items):
+        return [items[0]]
+
+    def orderitems_chain(self, items):
+        return items[0] + [items[1]]
+
+    def order_item_default(self, items):
+        return OrderByItem(field=items[0], direction="asc")
+
+    def order_item_dir(self, items):
+        return OrderByItem(field=items[0], direction=str(items[1]).lower())
+
+    # ── LIMIT ────────────────────────────────────────────────────────────
+
+    def limit_clause(self, items):
+        return int(str(items[0]))

@@ -612,3 +612,135 @@ class TestExecuteError:
         compiled = compile(parse("from function as fn select fn.name"))
         with pytest.raises((ExecuteError, Exception)):
             run(compiled, bad_engine)
+
+
+# ---------------------------------------------------------------------------
+# TestOrderByData
+# ---------------------------------------------------------------------------
+
+class TestOrderByData:
+    def test_order_by_name_asc_sorted(self, engine):
+        result = run(
+            compile(parse("from function as fn select fn.name order by fn.name asc")),
+            engine,
+        )
+        names = [r["name"] for r in result.rows]
+        assert names == sorted(names)
+
+    def test_order_by_name_desc_sorted(self, engine):
+        result = run(
+            compile(parse("from function as fn select fn.name order by fn.name desc")),
+            engine,
+        )
+        names = [r["name"] for r in result.rows]
+        assert names == sorted(names, reverse=True)
+
+    def test_order_by_default_is_asc(self, engine):
+        result_default = run(
+            compile(parse("from function as fn select fn.name order by fn.name")),
+            engine,
+        )
+        result_asc = run(
+            compile(parse("from function as fn select fn.name order by fn.name asc")),
+            engine,
+        )
+        assert [r["name"] for r in result_default.rows] == [r["name"] for r in result_asc.rows]
+
+    def test_order_by_with_where(self, engine):
+        result = run(
+            compile(parse(
+                'from function as fn '
+                'where fn.language = "python" '
+                'select fn.name '
+                'order by fn.name asc'
+            )),
+            engine,
+        )
+        names = [r["name"] for r in result.rows]
+        assert names == sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# TestLimitData
+# ---------------------------------------------------------------------------
+
+class TestLimitData:
+    def test_limit_reduces_row_count(self, engine):
+        full = run(
+            compile(parse("from function as fn select fn.name")),
+            engine,
+        )
+        limited = run(
+            compile(parse("from function as fn select fn.name limit 2")),
+            engine,
+        )
+        assert limited.row_count == 2
+        assert len(limited.rows) == 2
+        assert limited.row_count < full.row_count
+
+    def test_limit_1_returns_one_row(self, engine):
+        result = run(
+            compile(parse("from function as fn select fn.name limit 1")),
+            engine,
+        )
+        assert result.row_count == 1
+        assert len(result.rows) == 1
+
+    def test_limit_larger_than_result_returns_all(self, engine):
+        full = run(
+            compile(parse("from function as fn select fn.name")),
+            engine,
+        )
+        big_limit = run(
+            compile(parse("from function as fn select fn.name limit 9999")),
+            engine,
+        )
+        assert big_limit.row_count == full.row_count
+
+    def test_order_by_then_limit_gives_top_n(self, engine):
+        # ORDER BY name ASC LIMIT 2 must return the 2 lexicographically first names
+        all_result = run(
+            compile(parse("from function as fn select fn.name order by fn.name asc")),
+            engine,
+        )
+        top2 = run(
+            compile(parse("from function as fn select fn.name order by fn.name asc limit 2")),
+            engine,
+        )
+        assert [r["name"] for r in top2.rows] == [r["name"] for r in all_result.rows[:2]]
+
+    def test_limit_with_where(self, engine):
+        result = run(
+            compile(parse(
+                'from function as fn '
+                'where fn.language = "python" '
+                'select fn.name limit 1'
+            )),
+            engine,
+        )
+        assert result.row_count == 1
+
+
+# ---------------------------------------------------------------------------
+# TestExecutorReliability
+# ---------------------------------------------------------------------------
+
+class TestExecutorReliability:
+    def test_column_count_mismatch_raises_execute_error(self, engine):
+        """
+        If compiled.columns has a different length than the DB result row,
+        run() must raise ExecuteError rather than silently truncating data.
+        """
+        from graft_engine.compiler import CompiledQuery, compile
+        from graft_engine.executor import ExecuteError
+
+        # Compile a query that returns 2 columns
+        real = compile(parse("from function as fn select fn.name, fn.filename"))
+        # Tamper: tell the compiled query it only has 1 column label
+        tampered = CompiledQuery(
+            statement=real.statement,
+            query_sql=real.query_sql,
+            columns=["name"],          # <-- 1 label but DB will return 2 columns
+        )
+        with pytest.raises(ExecuteError, match="Column count mismatch"):
+            run(tampered, engine)

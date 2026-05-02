@@ -6,9 +6,33 @@
 // so the grammar is unambiguous to Lark's earley parser.
 
 // ---- Query root -----------------------------------------------------------
+// Eight alternatives cover all combinations of optional WHERE / ORDER BY / LIMIT.
+// Left-recursive style is preserved — no group quantifiers.
 
 query : "from" entity_path "as" IDENT "select" projection
+      | "from" entity_path "as" IDENT "select" projection order_by
+      | "from" entity_path "as" IDENT "select" projection limit
+      | "from" entity_path "as" IDENT "select" projection order_by limit
       | "from" entity_path "as" IDENT "where" condition "select" projection
+      | "from" entity_path "as" IDENT "where" condition "select" projection order_by
+      | "from" entity_path "as" IDENT "where" condition "select" projection limit
+      | "from" entity_path "as" IDENT "where" condition "select" projection order_by limit
+
+// ---- ORDER BY + LIMIT ----------------------------------------------------
+
+order_by    : "order" "by" order_items
+
+order_items : order_item                    -> orderitems_single
+            | order_items "," order_item    -> orderitems_chain
+
+order_item  : field                         -> order_item_default
+            | field ORDER_DIR               -> order_item_dir
+
+ORDER_DIR   : "asc" | "desc"
+
+limit       : "limit" POS_INT               -> limit_clause
+
+POS_INT     : /[1-9][0-9]*/
 
 // ---- Entity path (left-recursive) ----------------------------------------
 

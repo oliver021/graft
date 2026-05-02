@@ -575,3 +575,226 @@ class TestSQLCorrectness:
         sql = _sql('from class.methods as m where m.className = "Calculator" select m.name')
         assert "Calculator" in sql
         assert "parent_sym" in sql
+
+
+# ---------------------------------------------------------------------------
+# TestOrderBy
+# ---------------------------------------------------------------------------
+
+class TestOrderBy:
+    def test_order_by_asc_in_sql(self):
+        sql = _sql("from function as fn select fn.name order by fn.name asc")
+        assert "ORDER BY" in sql.upper()
+        assert "ASC" in sql.upper()
+
+    def test_order_by_desc_in_sql(self):
+        sql = _sql("from function as fn select fn.name order by fn.name desc")
+        assert "ORDER BY" in sql.upper()
+        assert "DESC" in sql.upper()
+
+    def test_order_by_default_is_asc(self):
+        sql = _sql("from function as fn select fn.name order by fn.name")
+        assert "ORDER BY" in sql.upper()
+        assert "ASC" in sql.upper()
+
+    def test_order_by_field_in_sql(self):
+        sql = _sql("from function as fn select fn.name order by fn.paramCount desc")
+        assert "ORDER BY" in sql.upper()
+        assert "json_array_length" in sql  # paramCount compiles to json_array_length
+
+    def test_order_by_multi_key_in_sql(self):
+        sql = _sql(
+            "from function as fn select fn.name, fn.filename "
+            "order by fn.filename asc, fn.name desc"
+        )
+        assert sql.upper().count("ASC") >= 1
+        assert "DESC" in sql.upper()
+
+    def test_order_by_with_where(self):
+        sql = _sql(
+            'from function as fn '
+            'where fn.language = "python" '
+            'select fn.name '
+            'order by fn.name asc'
+        )
+        assert "python" in sql
+        assert "ORDER BY" in sql.upper()
+
+    def test_no_order_by_absent_from_sql(self):
+        sql = _sql("from function as fn select fn.name")
+        assert "ORDER BY" not in sql.upper()
+
+    def test_order_by_cte_query(self):
+        sql = _sql(
+            "from function.callDepth() as fn "
+            "where fn.depth > 0 "
+            "select fn.name, fn.depth "
+            "order by fn.depth desc"
+        )
+        assert "ORDER BY" in sql.upper()
+        assert "DESC" in sql.upper()
+
+
+# ---------------------------------------------------------------------------
+# TestLimit
+# ---------------------------------------------------------------------------
+
+class TestLimit:
+    def test_limit_in_sql(self):
+        sql = _sql("from function as fn select fn.name limit 10")
+        assert "LIMIT" in sql.upper()
+        assert "10" in sql
+
+    def test_limit_value_correct(self):
+        sql = _sql("from function as fn select fn.name limit 5")
+        assert "5" in sql
+
+    def test_no_limit_absent_from_sql(self):
+        sql = _sql("from function as fn select fn.name")
+        assert "LIMIT" not in sql.upper()
+
+    def test_limit_with_order_by_in_sql(self):
+        sql = _sql(
+            "from function as fn select fn.name, fn.paramCount "
+            "order by fn.paramCount desc limit 10"
+        )
+        assert "ORDER BY" in sql.upper()
+        assert "LIMIT" in sql.upper()
+        assert "10" in sql
+
+    def test_limit_with_where(self):
+        sql = _sql(
+            'from function as fn '
+            'where fn.language = "python" '
+            'select fn.name '
+            'limit 3'
+        )
+        assert "python" in sql
+        assert "LIMIT" in sql.upper()
+
+    def test_limit_cte_query(self):
+        sql = _sql(
+            "from function.callDepth() as fn "
+            "select fn.name, fn.depth "
+            "order by fn.depth desc limit 5"
+        )
+        assert "LIMIT" in sql.upper()
+        assert "5" in sql
+
+
+# ---------------------------------------------------------------------------
+# TestReliability
+# ---------------------------------------------------------------------------
+
+class TestReliability:
+    # ── signature_match with typed args ────────────────────────────────────
+
+    def test_signature_with_typed_arg_raises_compile_error(self):
+        """signature('str') with a non-null arg is not implemented; must raise."""
+        from graft_engine.compiler import CompileError
+        with pytest.raises(CompileError, match="not yet supported"):
+            _compile("from function.signature('str') as fn select fn.name")
+
+    # ── Condition invariant ─────────────────────────────────────────────────
+
+    def test_mismatched_condition_operators_raises(self):
+        """Malformed Condition (too many operators) must raise CompileError."""
+        from graft_engine.compiler import CompileError
+        from graft_parser.ast_nodes import (
+            Condition, ConditionExpr, Field, FieldProjection, Projection,
+            EntityPath, QueryAST,
+        )
+        bad_condition = Condition(
+            expressions=[
+                ConditionExpr(Field("fn", ["name"]), "=", "foo"),
+            ],
+            operators=["and", "or"],   # 2 ops for 1 expr — violates invariant
+        )
+        ast = QueryAST(
+            entity_path=EntityPath(root="function", traversals=[]),
+            alias="fn",
+            condition=bad_condition,
+            projection=Projection(items=[FieldProjection(Field("fn", ["name"]))]),
+        )
+        with pytest.raises(CompileError, match="Malformed WHERE clause"):
+            from graft_engine.compiler import compile as gql_compile
+            from graft_engine.entity_registry import REGISTRY
+            gql_compile(ast, REGISTRY)
+
+    def test_empty_condition_expressions_raises(self):
+        """Condition with zero expressions must raise CompileError."""
+        from graft_engine.compiler import CompileError
+        from graft_parser.ast_nodes import (
+            Condition, Field, FieldProjection, Projection,
+            EntityPath, QueryAST,
+        )
+        bad_condition = Condition(expressions=[], operators=[])
+        ast = QueryAST(
+            entity_path=EntityPath(root="function", traversals=[]),
+            alias="fn",
+            condition=bad_condition,
+            projection=Projection(items=[FieldProjection(Field("fn", ["name"]))]),
+        )
+        with pytest.raises(CompileError, match="no expressions"):
+            from graft_engine.compiler import compile as gql_compile
+            from graft_engine.entity_registry import REGISTRY
+            gql_compile(ast, REGISTRY)
+
+    # ── LIMIT guard in compiler ─────────────────────────────────────────────
+
+    def test_manually_constructed_limit_zero_raises(self):
+        """A QueryAST with limit=0 (e.g. hand-crafted) must raise CompileError."""
+        from graft_engine.compiler import CompileError
+        from graft_parser.ast_nodes import (
+            Field, FieldProjection, Projection, EntityPath, QueryAST,
+        )
+        ast = QueryAST(
+            entity_path=EntityPath(root="function", traversals=[]),
+            alias="fn",
+            condition=None,
+            projection=Projection(items=[FieldProjection(Field("fn", ["name"]))]),
+            limit=0,
+        )
+        with pytest.raises(CompileError, match="positive integer"):
+            from graft_engine.compiler import compile as gql_compile
+            from graft_engine.entity_registry import REGISTRY
+            gql_compile(ast, REGISTRY)
+
+    def test_manually_constructed_negative_limit_raises(self):
+        """A QueryAST with limit=-1 must raise CompileError."""
+        from graft_engine.compiler import CompileError
+        from graft_parser.ast_nodes import (
+            Field, FieldProjection, Projection, EntityPath, QueryAST,
+        )
+        ast = QueryAST(
+            entity_path=EntityPath(root="function", traversals=[]),
+            alias="fn",
+            condition=None,
+            projection=Projection(items=[FieldProjection(Field("fn", ["name"]))]),
+            limit=-1,
+        )
+        with pytest.raises(CompileError, match="positive integer"):
+            from graft_engine.compiler import compile as gql_compile
+            from graft_engine.entity_registry import REGISTRY
+            gql_compile(ast, REGISTRY)
+
+    # ── ORDER BY direction guard ────────────────────────────────────────────
+
+    def test_invalid_order_direction_raises(self):
+        """An OrderByItem with an invalid direction must raise CompileError."""
+        from graft_engine.compiler import CompileError
+        from graft_parser.ast_nodes import (
+            Field, FieldProjection, Projection, EntityPath, QueryAST,
+            OrderBy, OrderByItem,
+        )
+        ast = QueryAST(
+            entity_path=EntityPath(root="function", traversals=[]),
+            alias="fn",
+            condition=None,
+            projection=Projection(items=[FieldProjection(Field("fn", ["name"]))]),
+            order_by=OrderBy(items=[OrderByItem(Field("fn", ["name"]), "ascending")]),
+        )
+        with pytest.raises(CompileError, match="Invalid ORDER BY direction"):
+            from graft_engine.compiler import compile as gql_compile
+            from graft_engine.entity_registry import REGISTRY
+            gql_compile(ast, REGISTRY)

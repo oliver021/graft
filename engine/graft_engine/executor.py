@@ -134,6 +134,15 @@ def run(compiled: CompiledQuery, engine: sa.Engine) -> QueryResult:
     # Use compiler's column names (labels) if they match; fall back to DB keys
     columns = compiled.columns if compiled.columns else keys
 
+    # Guard against column-count mismatch between compiler labels and DB result.
+    # zip() silently truncates to the shorter side, producing subtly wrong dicts.
+    if raw_rows and len(columns) != len(raw_rows[0]):
+        raise ExecuteError(
+            f"Column count mismatch: compiler produced {len(columns)} column name(s) "
+            f"but the database returned {len(raw_rows[0])} column(s). "
+            f"Compiler columns: {columns}. DB columns: {list(keys)}"
+        )
+
     rows = [
         {col: val for col, val in zip(columns, row)}
         for row in raw_rows

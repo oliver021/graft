@@ -17,13 +17,15 @@ from .ast_nodes import (
     FieldProjection,
     FieldTraversal,
     LiteralProjection,
+    OrderBy,
+    OrderByItem,
     PredicateTraversal,
     Projection,
     ProjectionItem,
     QueryAST,
     Traversal,
 )
-from .errors import GraftParseError
+from .errors import GraftParseError, ParseErrorKind
 from ._parser import parse
 
 __all__ = [
@@ -42,4 +44,7 @@ __all__ = [
     "FieldProjection",
     "LiteralProjection",
     "ConcatProjection",
+    "OrderBy",
+    "OrderByItem",
+    "ParseErrorKind",
 ]

@@ -940,18 +940,21 @@ class TestScanDir:
         assert results == []
 
     def test_scan_dir_bad_file_does_not_stop_iteration(self, tmp_path):
-        import warnings
         from code_indexer.indexer import scan_dir
+        from code_indexer import SkippedFile, ScanError
+        from code_indexer.models import ScanResult
 
         (tmp_path / "good.py").write_text("def ok(): pass")
-        # Write a binary file with .py extension to trigger a decode/parse error
+        # Binary file with .py extension — yielded as SkippedFile, not a crash
         (tmp_path / "bad.py").write_bytes(b"\xff\xfe" + b"\x00" * 50)
 
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            results = list(scan_dir(tmp_path))
-        # good.py must still be yielded regardless of bad.py
-        assert any("good.py" in r.file.path for r in results)
+        items = list(scan_dir(tmp_path))
+        # good.py must still be yielded as a ScanResult
+        scan_results = [i for i in items if isinstance(i, ScanResult)]
+        assert any("good.py" in r.file.path for r in scan_results)
+        # bad.py must appear as SkippedFile (binary) — not crash the iterator
+        non_results = [i for i in items if not isinstance(i, ScanResult)]
+        assert any(isinstance(i, SkippedFile) for i in non_results)
 
 
 class TestUUIDStability:

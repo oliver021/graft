@@ -11,6 +11,7 @@ import pytest
 from graft_parser import (
     parse,
     GraftParseError,
+    ParseErrorKind,
     QueryAST,
     EntityPath,
     FieldTraversal,
@@ -18,6 +19,8 @@ from graft_parser import (
     Field,
     Condition,
     ConditionExpr,
+    OrderBy,
+    OrderByItem,
     Projection,
     FieldProjection,
     LiteralProjection,
@@ -549,3 +552,322 @@ class TestErrors:
                 'where (fn.a = "x" and fn.b = "y") '
                 'select fn.name'
             )
+
+
+# ── ORDER BY tests ────────────────────────────────────────────────────────
+
+class TestOrderBy:
+    def test_order_by_asc_default(self):
+        ast = parse("from function as fn select fn.name order by fn.name")
+        assert ast.order_by is not None
+        assert isinstance(ast.order_by, OrderBy)
+        assert len(ast.order_by.items) == 1
+        item = ast.order_by.items[0]
+        assert item.field == Field(alias="fn", path=["name"])
+        assert item.direction == "asc"
+
+    def test_order_by_explicit_asc(self):
+        ast = parse("from function as fn select fn.name order by fn.name asc")
+        assert ast.order_by.items[0].direction == "asc"
+
+    def test_order_by_desc(self):
+        ast = parse("from function as fn select fn.name order by fn.paramCount desc")
+        item = ast.order_by.items[0]
+        assert item.field == Field(alias="fn", path=["paramCount"])
+        assert item.direction == "desc"
+
+    def test_order_by_multiple_keys(self):
+        ast = parse(
+            "from function as fn select fn.name, fn.filename "
+            "order by fn.filename asc, fn.name desc"
+        )
+        assert len(ast.order_by.items) == 2
+        assert ast.order_by.items[0].field == Field(alias="fn", path=["filename"])
+        assert ast.order_by.items[0].direction == "asc"
+        assert ast.order_by.items[1].field == Field(alias="fn", path=["name"])
+        assert ast.order_by.items[1].direction == "desc"
+
+    def test_order_by_with_where(self):
+        ast = parse(
+            'from function as fn '
+            'where fn.language = "python" '
+            'select fn.name '
+            'order by fn.name asc'
+        )
+        assert ast.condition is not None
+        assert ast.order_by is not None
+        assert ast.order_by.items[0].direction == "asc"
+
+    def test_no_order_by_is_none(self):
+        ast = parse("from function as fn select fn.name")
+        assert ast.order_by is None
+
+
+# ── LIMIT tests ───────────────────────────────────────────────────────────
+
+class TestLimit:
+    def test_limit_integer(self):
+        ast = parse("from function as fn select fn.name limit 10")
+        assert ast.limit == 10
+
+    def test_limit_one(self):
+        ast = parse("from function as fn select fn.name limit 1")
+        assert ast.limit == 1
+
+    def test_limit_large(self):
+        ast = parse("from function as fn select fn.name limit 1000")
+        assert ast.limit == 1000
+
+    def test_no_limit_is_none(self):
+        ast = parse("from function as fn select fn.name")
+        assert ast.limit is None
+
+    def test_limit_with_where(self):
+        ast = parse(
+            'from function as fn '
+            'where fn.language = "python" '
+            'select fn.name '
+            'limit 5'
+        )
+        assert ast.condition is not None
+        assert ast.limit == 5
+
+    def test_limit_with_order_by(self):
+        ast = parse(
+            "from function as fn select fn.name, fn.paramCount "
+            "order by fn.paramCount desc limit 10"
+        )
+        assert ast.order_by is not None
+        assert ast.order_by.items[0].direction == "desc"
+        assert ast.limit == 10
+
+    def test_limit_with_where_order_by(self):
+        ast = parse(
+            'from function as fn '
+            'where fn.language = "python" '
+            'select fn.name '
+            'order by fn.name asc '
+            'limit 20'
+        )
+        assert ast.condition is not None
+        assert ast.order_by is not None
+        assert ast.limit == 20
+
+
+# ── Reliability tests ─────────────────────────────────────────────────────
+
+class TestLimitReliability:
+    def test_limit_zero_is_parse_error(self):
+        """LIMIT 0 is meaningless and the grammar rejects it (POS_INT requires >= 1)."""
+        with pytest.raises(GraftParseError):
+            parse("from function as fn select fn.name limit 0")
+
+    def test_limit_float_is_parse_error(self):
+        """Fractional LIMIT should be rejected by the grammar, not silently truncated."""
+        with pytest.raises(GraftParseError):
+            parse("from function as fn select fn.name limit 10.5")
+
+    def test_limit_negative_is_parse_error(self):
+        """Negative LIMIT should be rejected by the grammar."""
+        with pytest.raises(GraftParseError):
+            parse("from function as fn select fn.name limit -5")
+
+
+# ── Error quality tests ───────────────────────────────────────────────────────
+# These tests assert that errors have the right kind, carry location info,
+# and surface useful hints — not just that an exception is raised.
+
+class TestErrorKind:
+    """ParseErrorKind is set correctly for each error category."""
+
+    def test_unexpected_eof_has_correct_kind(self):
+        """Missing SELECT → UNEXPECTED_EOF, not SYNTAX."""
+        try:
+            parse('from function as fn where fn.name = "foo"')
+        except GraftParseError as e:
+            assert e.kind == ParseErrorKind.UNEXPECTED_EOF
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_unexpected_token_has_syntax_kind(self):
+        """Unexpected token → SYNTAX kind."""
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            assert e.kind == ParseErrorKind.SYNTAX
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_grouped_condition_has_unsupported_kind(self):
+        """Grouped multi-term condition → UNSUPPORTED kind."""
+        try:
+            parse('from function as fn where (fn.a = "x" and fn.b = "y") select fn.name')
+        except GraftParseError as e:
+            assert e.kind == ParseErrorKind.UNSUPPORTED
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_not_on_compound_has_unsupported_kind(self):
+        """'not' on a compound condition → UNSUPPORTED kind."""
+        try:
+            # not wrapping a sub-condition (parsed as grouped_expr) → unsupported
+            parse('from function as fn where not (fn.a = "x" and fn.b = "y") select fn.name')
+        except GraftParseError as e:
+            assert e.kind in (ParseErrorKind.UNSUPPORTED, ParseErrorKind.SYNTAX)
+        else:
+            pytest.fail("Expected GraftParseError")
+
+
+class TestErrorLocation:
+    """Line and column are populated for located errors."""
+
+    def test_syntax_error_has_nonzero_line(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            assert e.line >= 1
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_syntax_error_has_nonzero_column(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            assert e.column >= 1
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_snippet_present_for_located_errors(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            assert e.snippet != ""
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_eof_error_has_nonzero_line(self):
+        try:
+            parse("from function as fn")
+        except GraftParseError as e:
+            assert e.line >= 1
+        else:
+            pytest.fail("Expected GraftParseError")
+
+
+class TestErrorHints:
+    """Hints are populated and contain useful context."""
+
+    def test_missing_select_hint_mentions_select(self):
+        try:
+            parse('from function as fn where fn.name = "foo"')
+        except GraftParseError as e:
+            assert "select" in e.hint.lower()
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_missing_as_hint_mentions_as(self):
+        """Omitting 'as' alias should hint at the 'as' keyword."""
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            assert "as" in e.hint.lower()
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_unsupported_grouped_hint_mentions_and_or(self):
+        try:
+            parse('from function as fn where (fn.a = "x" and fn.b = "y") select fn.name')
+        except GraftParseError as e:
+            assert e.hint != ""
+            assert "and" in e.hint.lower() or "or" in e.hint.lower()
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_unsupported_not_compound_hint_is_populated(self):
+        try:
+            parse('from function as fn where not (fn.a = "x" and fn.b = "y") select fn.name')
+        except GraftParseError as e:
+            assert e.hint != ""
+        else:
+            pytest.fail("Expected GraftParseError")
+
+    def test_entity_typo_hint_suggests_correction(self):
+        """'funcion' is close to 'function' — hint should suggest it."""
+        try:
+            parse("from funcion as fn select fn.name")
+        except GraftParseError as e:
+            # The hint should mention 'function' as the correction
+            assert "function" in e.hint.lower() or "function" in e.message.lower()
+        else:
+            pytest.fail("Expected GraftParseError")
+
+
+class TestErrorStr:
+    """__str__() produces a readable multi-line string."""
+
+    def test_str_contains_kind(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            s = str(e)
+            assert e.kind.value in s
+
+    def test_str_contains_message(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            s = str(e)
+            assert e.message in s
+
+    def test_str_contains_hint_when_present(self):
+        try:
+            parse('from function as fn where fn.name = "foo"')
+        except GraftParseError as e:
+            if e.hint:
+                s = str(e)
+                assert "Hint:" in s
+                assert e.hint in s
+
+    def test_str_contains_location_when_known(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            if e.line:
+                s = str(e)
+                assert str(e.line) in s
+
+    def test_repr_contains_kind_and_message(self):
+        try:
+            parse("from function fn select fn.name")
+        except GraftParseError as e:
+            r = repr(e)
+            assert "GraftParseError" in r
+            assert e.kind.value in r
+
+
+class TestErrorConstructors:
+    """Class-method constructors set the right fields."""
+
+    def test_syntax_constructor(self):
+        err = GraftParseError.syntax("bad token", line=3, column=7, hint="try this")
+        assert err.kind    == ParseErrorKind.SYNTAX
+        assert err.line    == 3
+        assert err.column  == 7
+        assert err.hint    == "try this"
+        assert err.message == "bad token"
+
+    def test_unexpected_eof_constructor(self):
+        err = GraftParseError.unexpected_eof("truncated", line=1, column=20)
+        assert err.kind == ParseErrorKind.UNEXPECTED_EOF
+
+    def test_unsupported_constructor_prefixes_message(self):
+        err = GraftParseError.unsupported("Grouped conditions", hint="rewrite it")
+        assert err.kind == ParseErrorKind.UNSUPPORTED
+        assert "Grouped conditions" in err.message
+        assert err.hint == "rewrite it"
+
+    def test_internal_constructor(self):
+        err = GraftParseError.internal("projection was None")
+        assert err.kind == ParseErrorKind.INTERNAL
+        assert "projection was None" in err.message
+        assert err.hint != ""   # internal errors always carry a bug-report hint

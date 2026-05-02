@@ -99,6 +99,10 @@ class ScanResult:
     symbols: list[SymbolRow] = field(default_factory=list)
     expressions: list[ExpressionRow] = field(default_factory=list)
     references: list[ReferenceRow] = field(default_factory=list)
+    # Fix #4: number of ERROR nodes found during parsing (0 = clean parse)
+    parse_error_count: int = 0
+    # Fix #10: True when extraction stopped early due to MAX_EXPRESSIONS_PER_FILE
+    expressions_truncated: bool = False
 
     # ------------------------------------------------------------------
     # Serialization
@@ -180,17 +184,47 @@ class ScanResult:
     # Direct DB insertion (requires SQLAlchemy engine)
     # ------------------------------------------------------------------
 
-    def insert_into(self, engine: Any) -> None:
+    def insert_into(self, engine: Any, *, replace: bool = False) -> None:
         """
         Insert all rows into the database using the provided SQLAlchemy engine.
 
         This is a convenience method — the library has no DB dependency
         itself, but callers that already have an engine can use this.
+
+        Args:
+            engine:  SQLAlchemy engine (sync).
+            replace: When True, delete any existing rows for this file_id before
+                     inserting — safe re-indexing without PK collision (fix #8).
+                     When False (default), raises IntegrityError if the file was
+                     already indexed with the same content hash.
         """
-        from sqlalchemy import Connection  # local import keeps DB optional
+        from sqlalchemy import Connection, delete, select  # local import keeps DB optional
 
         with engine.begin() as conn:
             conn: Connection
+
+            # Fix #8: remove stale rows so re-indexing never hits a PK collision.
+            # We delete by PATH (not file_id) so that a re-index after content
+            # changes (new hash → new UUID) also removes the old file row.
+            # CASCADE on FK columns handles children in PostgreSQL; we delete
+            # children explicitly first for SQLite where FK enforcement is off.
+            if replace:
+                old_ids_q = select(files_table.c.id).where(
+                    files_table.c.path == self.file.path
+                )
+                conn.execute(references_table.delete().where(
+                    references_table.c.file_id.in_(old_ids_q)
+                ))
+                conn.execute(expressions_table.delete().where(
+                    expressions_table.c.file_id.in_(old_ids_q)
+                ))
+                conn.execute(symbols_table.delete().where(
+                    symbols_table.c.file_id.in_(old_ids_q)
+                ))
+                conn.execute(files_table.delete().where(
+                    files_table.c.path == self.file.path
+                ))
+
             conn.execute(
                 files_table.insert(),
                 [self.file.__dict__],

@@ -37,6 +37,7 @@ from code_indexer.languages.base import (
     RawExtraction,
     RawReference,
     RawSymbol,
+    _truncate_source,
 )
 
 PY_LANGUAGE = Language(tspython.language())
@@ -57,8 +58,17 @@ class PythonAdapter(LanguageAdapter):
         tree = self._parser.parse(source_bytes)
         root = tree.root_node
         extraction = RawExtraction()
+        # Fix #4: count ERROR nodes so callers know parse quality
+        extraction.parse_error_count = self._count_errors(root)
         self._collect_symbols(root, extraction, parent_symbol_key=None, class_key=None)
         return extraction
+
+    def _count_errors(self, node: Node) -> int:
+        """Recursively count ERROR nodes in the tree-sitter parse tree."""
+        count = 1 if node.type == "ERROR" else 0
+        for child in node.children:
+            count += self._count_errors(child)
+        return count
 
     def _collect_symbols(
         self,
@@ -147,6 +157,10 @@ class PythonAdapter(LanguageAdapter):
     ) -> None:
         if depth > max_depth:
             return
+        # Fix #10: cap total expressions to avoid unbounded growth on generated files
+        if len(extraction.expressions) >= self.MAX_EXPRESSIONS:
+            extraction.expressions_truncated = True
+            return
 
         t = node.type
 
@@ -167,7 +181,8 @@ class PythonAdapter(LanguageAdapter):
             arg_count = len(args_node.named_children) if args_node else 0
             extraction.expressions.append(RawExpression(
                 kind="call",
-                source_text=self._text(node),
+                # Fix #5: truncate to avoid oversized DB rows
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,
@@ -178,11 +193,13 @@ class PythonAdapter(LanguageAdapter):
                 local_key=local_key,
                 extra={"callee": callee_text, "arg_count": arg_count, "is_method": "." in callee_text},
             ))
-            extraction.references.append(RawReference(
-                callee_name=callee_text,
-                from_symbol_local_key=symbol_local_key,
-                expression_local_key=local_key,
-            ))
+            # Fix #6: skip references with no resolvable callee name
+            if callee_text:
+                extraction.references.append(RawReference(
+                    callee_name=callee_text,
+                    from_symbol_local_key=symbol_local_key,
+                    expression_local_key=local_key,
+                ))
             if args_node:
                 for child in args_node.named_children:
                     self._walk_body(child, extraction, symbol_local_key, local_key, depth + 1, max_depth)
@@ -193,7 +210,7 @@ class PythonAdapter(LanguageAdapter):
             left_node = node.child_by_field_name("left")
             extraction.expressions.append(RawExpression(
                 kind="assignment",
-                source_text=self._text(node),
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,
@@ -214,7 +231,7 @@ class PythonAdapter(LanguageAdapter):
             op = next((self._text(c) for c in node.children if not c.is_named), "")
             extraction.expressions.append(RawExpression(
                 kind="binary",
-                source_text=self._text(node),
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,
@@ -233,7 +250,7 @@ class PythonAdapter(LanguageAdapter):
             local_key = self._make_local_key(node)
             extraction.expressions.append(RawExpression(
                 kind="return",
-                source_text=self._text(node),
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,
@@ -251,7 +268,7 @@ class PythonAdapter(LanguageAdapter):
             local_key = self._make_local_key(node)
             extraction.expressions.append(RawExpression(
                 kind="raise",
-                source_text=self._text(node),
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,
@@ -282,7 +299,7 @@ class PythonAdapter(LanguageAdapter):
                         break
             extraction.expressions.append(RawExpression(
                 kind="import",
-                source_text=self._text(node),
+                source_text=_truncate_source(self._text(node)),
                 start_byte=node.start_byte,
                 end_byte=node.end_byte,
                 start_line=node.start_point[0] + 1,

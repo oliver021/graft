@@ -10,6 +10,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+# Maximum length of source_text stored per expression.
+# Longer values are truncated with a '…' suffix to keep the DB lean.
+MAX_SOURCE_TEXT: int = 512
+
+# Default cap on total expressions extracted per file.
+# Prevents unbounded DB growth for generated / minified files.
+MAX_EXPRESSIONS_PER_FILE: int = 10_000
+
 
 @dataclass
 class RawSymbol:
@@ -59,6 +67,17 @@ class RawExtraction:
     symbols: list[RawSymbol] = field(default_factory=list)
     expressions: list[RawExpression] = field(default_factory=list)
     references: list[RawReference] = field(default_factory=list)
+    # Number of ERROR nodes found in the parse tree (tree-sitter syntax errors).
+    parse_error_count: int = 0
+    # True when expression extraction was stopped early due to MAX_EXPRESSIONS_PER_FILE.
+    expressions_truncated: bool = False
+
+
+def _truncate_source(text: str, limit: int = MAX_SOURCE_TEXT) -> str:
+    """Truncate source_text to `limit` characters, appending '…' if cut."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 class LanguageAdapter(ABC):
@@ -66,6 +85,7 @@ class LanguageAdapter(ABC):
 
     LANGUAGE_NAME: str
     FILE_EXTENSIONS: list[str]
+    MAX_EXPRESSIONS: int = MAX_EXPRESSIONS_PER_FILE
 
     @abstractmethod
     def extract(self, source: str) -> RawExtraction:
